@@ -1,6 +1,39 @@
-# TODO: Define 3 services: db, api, frontend
-#
-# Requirements:
-# - db: postgres:17-alpine, env_file .env, healthcheck
-# - api: build from ./Dockerfile, port 8080, depends_on db, env_file .env
-# - frontend: build from ./frontend/Dockerfile, port 8501, depends_on api, env API_URL=http://api:8080
+services:
+  db:
+    image: postgres:17-alpine
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-noderegistry} -d ${POSTGRES_DB:-noderegistry}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - API_URL=http://api:8080
+
+volumes:
+  postgres_data:
