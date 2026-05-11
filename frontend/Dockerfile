@@ -28,5 +28,5 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/')" || exit 1
  
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8501", "--workers", "2", "--timeout", "30", "app:app"]
  
