@@ -1,174 +1,189 @@
 import os
-import requests
-import streamlit as st
-import pandas as pd
-
-
-API_URL = os.environ.get("API_URL", "http://api:8080")
-TIMEOUT = 10
-
-
-def get_health():
+import requests as req
+from flask import Flask, Response, request
+ 
+BACKEND_URL = os.environ.get("API_URL", "http://api:8080")
+REQUEST_TIMEOUT = 8
+ 
+app = Flask(__name__)
+ 
+ 
+def fetch_health():
     try:
-        resp = requests.get(f"{API_URL}/health", timeout=TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.ConnectionError:
-        return {"error": "connection", "message": "Cannot connect to API"}
-    except requests.exceptions.Timeout:
-        return {"error": "timeout", "message": "API request timed out"}
-    except Exception as e:
-        return {"error": "unknown", "message": str(e)}
-
-
-def get_nodes():
-    try:
-        resp = requests.get(f"{API_URL}/api/nodes", timeout=TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.exceptions.ConnectionError:
-        return {"error": "connection"}
+        r = req.get(f"{BACKEND_URL}/health", timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
     except Exception:
-        return {"error": "failed"}
-
-
-def post_node(name: str, host: str, port: int):
+        return {"error": True}
+ 
+ 
+def fetch_nodes():
     try:
-        payload = {"name": name, "host": host, "port": port}
-        resp = requests.post(f"{API_URL}/api/nodes", json=payload, timeout=TIMEOUT)
-        return resp
-    except requests.exceptions.ConnectionError:
-        return None
-
-
-def delete_node(name: str):
-    try:
-        resp = requests.delete(f"{API_URL}/api/nodes/{name}", timeout=TIMEOUT)
-        return resp
-    except requests.exceptions.ConnectionError:
-        return None
-
-
-def render_health_indicator():
-    st.header("Health Indicator")
-    health = get_health()
-    
+        r = req.get(f"{BACKEND_URL}/api/nodes", timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+ 
+ 
+def render_page(message: str = "", error: str = "") -> str:
+    health = fetch_health()
+    nodes = fetch_nodes()
+ 
     if "error" in health:
-        st.error(f"API Status: OFFLINE ({health.get('message', 'Connection error')})")
+        health_html = '<p class="error">Backend: OFFLINE</p>'
     else:
         status = health.get("status", "unknown")
-        db_status = health.get("db", "unknown")
-        nodes_count = health.get("nodes_count", 0)
-        
-        if status == "ok" and db_status == "connected":
-            st.success("API Status: ONLINE")
-            st.info(f"Database: {db_status.upper()}")
-            st.metric(label="Active Nodes", value=nodes_count)
-        elif status == "ok" and db_status != "connected":
-            st.warning("API Status: ONLINE (Database disconnected)")
+        db = health.get("db", "unknown")
+        count = health.get("nodes_count", 0)
+        color = "green" if status == "ok" and db == "connected" else "orange"
+        health_html = f"""
+        <p style="color:{color}">
+            Backend: {'ONLINE' if status == 'ok' else 'UNHEALTHY'} |
+            DB: {db.upper()} |
+            Active nodes: {count}
+        </p>"""
+ 
+    rows = ""
+    for n in nodes:
+        rows += (
+            f"<tr><td>{n.get('name','')}</td><td>{n.get('host','')}</td>"
+            f"<td>{n.get('port','')}</td><td>{n.get('status','')}</td></tr>"
+        )
+ 
+    nodes_table = f"""
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>Node Name</th><th>Host Address</th>
+          <th>Port Number</th><th>Current Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows if rows else '<tr><td colspan="4">No nodes registered yet</td></tr>'}
+      </tbody>
+    </table>"""
+ 
+    msg_html = f'<p class="success">{message}</p>' if message else ""
+    err_html = f'<p class="error">{error}</p>' if error else ""
+ 
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Node Registry Dashboard</title>
+  <style>
+    body {{ font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }}
+    h1 {{ color: #333; }}
+    h2 {{ margin-top: 30px; color: #555; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th {{ background: #f0f0f0; }}
+    .success {{ color: green; font-weight: bold; }}
+    .error {{ color: red; font-weight: bold; }}
+    input, select {{ padding: 6px; margin: 4px 0; width: 100%; box-sizing: border-box; }}
+    button {{ padding: 8px 16px; background: #0066cc; color: white; border: none;
+             cursor: pointer; border-radius: 4px; margin-top: 8px; }}
+    button:hover {{ background: #0052a3; }}
+    .delete-btn {{ background: #cc3300; }}
+    .delete-btn:hover {{ background: #a32800; }}
+    form {{ max-width: 400px; }}
+    label {{ display: block; margin-top: 10px; font-weight: bold; }}
+    hr {{ margin: 30px 0; }}
+  </style>
+</head>
+<body>
+  <h1>🖥️ Node Registry Dashboard</h1>
+  <p><small>Connected to backend: {BACKEND_URL}</small></p>
+ 
+  <h2>Health Status</h2>
+  {health_html}
+  <hr/>
+ 
+  <h2>Registered Nodes Inventory</h2>
+  {nodes_table}
+  <hr/>
+ 
+  <h2>Register New Node</h2>
+  {msg_html}{err_html}
+  <form method="POST" action="/register">
+    <label for="name">Node Name</label>
+    <input id="name" name="name" type="text" placeholder="e.g., primary-worker-01" required/>
+    <label for="host">Host Address</label>
+    <input id="host" name="host" type="text" placeholder="e.g., 10.0.1.100" required/>
+    <label for="port">Port</label>
+    <input id="port" name="port" type="number" min="1" max="65535" value="8080" required/>
+    <button type="submit">Add Node to Registry</button>
+  </form>
+  <hr/>
+ 
+  <h2>Remove Node (Soft Delete)</h2>
+  <p><small>Marks the node as inactive — not a permanent removal.</small></p>
+  <form method="POST" action="/delete">
+    <label for="del_name">Node Name to Delete</label>
+    <input id="del_name" name="name" type="text" placeholder="Enter exact node name" required/>
+    <button type="submit" class="delete-btn">Mark Node as Inactive</button>
+  </form>
+</body>
+</html>"""
+ 
+ 
+@app.route("/", methods=["GET"])
+def index():
+    return Response(render_page(), mimetype="text/html")
+ 
+ 
+@app.route("/register", methods=["POST"])
+def register():
+    name = request.form.get("name", "").strip()
+    host = request.form.get("host", "").strip()
+    port = request.form.get("port", "8080").strip()
+ 
+    if not name or not host:
+        return Response(render_page(error="Node Name and Host Address are required"), mimetype="text/html")
+ 
+    try:
+        port_int = int(port)
+    except ValueError:
+        return Response(render_page(error="Invalid port number"), mimetype="text/html")
+ 
+    try:
+        resp = req.post(
+            f"{BACKEND_URL}/api/nodes",
+            json={"name": name, "host": host, "port": port_int},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 201:
+            return Response(render_page(message=f"Node '{name}' successfully registered!"), mimetype="text/html")
+        elif resp.status_code == 409:
+            detail = resp.json().get("detail", "Node already exists")
+            return Response(render_page(error=f"Conflict: {detail}"), mimetype="text/html")
         else:
-            st.error("API Status: UNHEALTHY")
-
-
-def render_node_list():
-    st.header("Registered Nodes")
-    nodes = get_nodes()
-    
-    if isinstance(nodes, dict) and "error" in nodes:
-        st.warning("Could not fetch nodes from API")
-        return
-    
-    if not nodes:
-        st.info("No nodes registered yet")
-        return
-    
-    df = pd.DataFrame(nodes)
-    display_cols = ["name", "host", "port", "status"]
-    
-    for col in display_cols:
-        if col not in df.columns:
-            df[col] = "N/A"
-    
-    display_df = df[display_cols].copy()
-    display_df.columns = ["Name", "Host", "Port", "Status"]
-    
-    st.dataframe(display_df, use_container_width=True)
-
-
-def render_registration_form():
-    st.header("Register a New Node")
-    
-    with st.form("register_form", clear_on_submit=True):
-        name = st.text_input("Node Name", placeholder="e.g., worker-01")
-        host = st.text_input("Host", placeholder="e.g., 192.168.1.10")
-        port = st.number_input("Port", min_value=1, max_value=65535, value=8080)
-        submitted = st.form_submit_button("Register Node")
-        
-        if submitted:
-            if not name or not host:
-                st.error("Name and Host are required")
-            else:
-                resp = post_node(name.strip(), host.strip(), int(port))
-                
-                if resp is None:
-                    st.error("Connection error: Could not reach API")
-                elif resp.status_code == 201:
-                    st.success(f"Node '{name}' registered successfully!")
-                    st.rerun()
-                elif resp.status_code == 409:
-                    detail = resp.json().get("detail", "Unknown error")
-                    st.error(f"Conflict: {detail}")
-                else:
-                    try:
-                        detail = resp.json().get("detail", f"HTTP {resp.status_code}")
-                    except Exception:
-                        detail = f"HTTP {resp.status_code}"
-                    st.error(f"Failed to register node: {detail}")
-
-
-def render_delete_button():
-    st.header("Delete a Node")
-    st.caption("This performs a soft-delete (status becomes 'inactive')")
-    
-    with st.form("delete_form", clear_on_submit=True):
-        delete_name = st.text_input("Node Name to Delete", placeholder="Enter node name")
-        delete_submitted = st.form_submit_button("Delete Node", type="secondary")
-        
-        if delete_submitted:
-            if not delete_name:
-                st.error("Please enter a node name")
-            else:
-                resp = delete_node(delete_name.strip())
-                
-                if resp is None:
-                    st.error("Connection error: Could not reach API")
-                elif resp.status_code == 204:
-                    st.success(f"Node '{delete_name}' deleted (soft-delete)")
-                    st.rerun()
-                elif resp.status_code == 404:
-                    detail = resp.json().get("detail", "Node not found")
-                    st.error(f"Not found: {detail}")
-                else:
-                    try:
-                        detail = resp.json().get("detail", f"HTTP {resp.status_code}")
-                    except Exception:
-                        detail = f"HTTP {resp.status_code}"
-                    st.error(f"Failed to delete node: {detail}")
-
-
-def main():
-    st.set_page_config(page_title="Node Registry Dashboard", layout="wide")
-    st.title("Node Registry Dashboard")
-    st.caption(f"API Endpoint: {API_URL}")
-    
-    render_health_indicator()
-    st.divider()
-    render_node_list()
-    st.divider()
-    render_registration_form()
-    st.divider()
-    render_delete_button()
-
-
+            detail = resp.json().get("detail", f"HTTP {resp.status_code}")
+            return Response(render_page(error=f"Registration failed: {detail}"), mimetype="text/html")
+    except Exception as e:
+        return Response(render_page(error=f"Connection failed: {e}"), mimetype="text/html")
+ 
+ 
+@app.route("/delete", methods=["POST"])
+def delete():
+    name = request.form.get("name", "").strip()
+    if not name:
+        return Response(render_page(error="Please provide a node name"), mimetype="text/html")
+ 
+    try:
+        resp = req.delete(f"{BACKEND_URL}/api/nodes/{name}", timeout=REQUEST_TIMEOUT)
+        if resp.status_code == 204:
+            return Response(render_page(message=f"Node '{name}' deactivated (soft-deleted)"), mimetype="text/html")
+        elif resp.status_code == 404:
+            detail = resp.json().get("detail", "Node not found")
+            return Response(render_page(error=f"Not Found: {detail}"), mimetype="text/html")
+        else:
+            detail = resp.json().get("detail", f"HTTP {resp.status_code}")
+            return Response(render_page(error=f"Deletion failed: {detail}"), mimetype="text/html")
+    except Exception as e:
+        return Response(render_page(error=f"Connection failed: {e}"), mimetype="text/html")
+ 
+ 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=8501, debug=False)
